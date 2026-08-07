@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Docker
+*.log
+
+# Editors/OS
+.vscode/
+.idea/
+.DS_Store
+
+# Postgres/pgAdmin local data (if ever bind-mounted instead of named volume)
+pgdata/
+pgadmin_data/
