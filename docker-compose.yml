@@ -80,7 +80,10 @@ services:
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     ports:
-      - "${PGADMIN_PORT}:80"
+      # Loopback-only: published Docker ports bypass ufw by default, so this
+      # is bound to 127.0.0.1 rather than all interfaces. Reach it remotely
+      # via an SSH tunnel (see DEPLOYMENT.md).
+      - "127.0.0.1:${PGADMIN_PORT}:80"
     depends_on:
       postgres:
         condition: service_healthy

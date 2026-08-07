@@ -8,6 +8,7 @@ venv/
 .env
 .env.*
 !.env.example
+!.env.prod.example
 
 # Docker
 *.log
@@ -20,3 +21,10 @@ venv/
 # Postgres/pgAdmin local data (if ever bind-mounted instead of named volume)
 pgdata/
 pgadmin_data/
+
+# Generated at deploy time by scripts/init_ssl.sh — templates are committed,
+# the rendered file (with the real domain baked in) is not.
+nginx/nginx.prod.conf
+
+# Local Postgres backups (see scripts/backup.sh)
+backups/
