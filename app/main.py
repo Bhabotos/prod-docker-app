@@ -1,12 +1,14 @@
+import json
 import logging
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from sqlalchemy.orm import Session
 
 import crud
 import schemas
 from config import settings
 from database import Base, engine, get_db
+from redis_client import redis_client
 
 logging.basicConfig(
     level=settings.log_level,
@@ -15,6 +17,8 @@ logging.basicConfig(
 logger = logging.getLogger(settings.app_name)
 
 app = FastAPI(title=settings.app_name)
+
+ITEM_CACHE_TTL_SECONDS = 30
 
 
 @app.on_event("startup")
@@ -44,11 +48,21 @@ def list_items(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
 
 
 @app.get("/items/{item_id}", response_model=schemas.ItemRead)
-def read_item(item_id: int, db: Session = Depends(get_db)):
+def read_item(item_id: int, response: Response, db: Session = Depends(get_db)):
+    cache_key = f"item:{item_id}"
+    cached = redis_client.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return json.loads(cached)
+
     db_item = crud.get_item(db, item_id)
     if db_item is None:
         raise HTTPException(status_code=404, detail="Item not found")
-    return db_item
+
+    item = schemas.ItemRead.model_validate(db_item)
+    redis_client.setex(cache_key, ITEM_CACHE_TTL_SECONDS, item.model_dump_json())
+    response.headers["X-Cache"] = "MISS"
+    return item
 
 
 @app.put("/items/{item_id}", response_model=schemas.ItemRead)
@@ -56,6 +70,7 @@ def update_item(item_id: int, item: schemas.ItemUpdate, db: Session = Depends(ge
     db_item = crud.update_item(db, item_id, item)
     if db_item is None:
         raise HTTPException(status_code=404, detail="Item not found")
+    redis_client.delete(f"item:{item_id}")
     return db_item
 
 
@@ -64,3 +79,4 @@ def delete_item(item_id: int, db: Session = Depends(get_db)):
     db_item = crud.delete_item(db, item_id)
     if db_item is None:
         raise HTTPException(status_code=404, detail="Item not found")
+    redis_client.delete(f"item:{item_id}")
