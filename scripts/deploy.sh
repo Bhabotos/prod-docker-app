@@ -16,6 +16,16 @@ git pull --ff-only
 echo "==> Deploying image: $FASTAPI_IMAGE"
 export FASTAPI_IMAGE
 
+# Persist it into .env too — otherwise .env keeps whatever FASTAPI_IMAGE was
+# last written by hand (e.g. the bootstrap tag), and any FUTURE manual
+# `docker compose up` (run without going through this script) would silently
+# fall back to that stale value instead of the image actually deployed here.
+if grep -q '^FASTAPI_IMAGE=' .env; then
+  sed -i "s|^FASTAPI_IMAGE=.*|FASTAPI_IMAGE=$FASTAPI_IMAGE|" .env
+else
+  echo "FASTAPI_IMAGE=$FASTAPI_IMAGE" >> .env
+fi
+
 echo "==> Pulling images"
 $COMPOSE pull fastapi nginx postgres redis pgadmin
 
