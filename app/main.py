@@ -10,6 +10,8 @@ import schemas
 from config import settings
 from database import Base, engine, get_db
 from redis_client import redis_client
+from bmi_dashboard.api import router as bmi_router
+from bmi_dashboard.startup import startup as bmi_startup
 
 logging.basicConfig(
     level=settings.log_level,
@@ -24,10 +26,12 @@ ITEM_CACHE_TTL_SECONDS = 30
 async def lifespan(_: FastAPI):
     logger.info("Starting %s in %s mode", settings.app_name, settings.app_env)
     Base.metadata.create_all(bind=engine)
+    bmi_startup()  # no-op unless the BMI dashboard is configured; migrations failures stop the app on purpose
     yield
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.include_router(bmi_router)
 
 
 @app.get("/")

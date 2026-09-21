@@ -26,6 +26,17 @@ jobs:
   # ------------------------------------------------------------------ 1. test
   test:
     runs-on: ubuntu-latest
+    # Throwaway PostgreSQL for the migration / isolation integration tests (never a real database).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci-throwaway-postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      TEST_PG_ADMIN_URL: postgresql+psycopg://postgres:ci-throwaway-postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
 
@@ -38,9 +49,19 @@ jobs:
       - name: Install dependencies
         run: pip install -r app/requirements-dev.txt
 
-      - name: Unit tests
+      - name: Backend tests (unit, API, PostgreSQL migrations and isolation)
         working-directory: app
-        run: pytest -q
+        run: pytest -q -rs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Frontend syntax check and unit tests
+        working-directory: frontend
+        run: |
+          npm run check
+          npm test
 
       - name: Lint shell scripts
         run: shellcheck -x -S warning scripts/*.sh
@@ -59,11 +80,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create .env for CI
-        run: cp .env.example .env
+      - name: Create .env for CI (random throwaway secrets)
+        run: |
+          cp .env.example .env
+          CI_PW="ci-$(openssl rand -hex 12)"
+          echo "::add-mask::$CI_PW"
+          echo "CI_DASHBOARD_PASSWORD=$CI_PW" >> "$GITHUB_ENV"
+          HASH="$(printf '%s\n' "$CI_PW" | PYTHONPATH=app python3 -m bmi_dashboard.cli hash-password-stdin | sed 's/^DASHBOARD_PASSWORD_HASH=//')"
+          sed -i "s|^DASHBOARD_PASSWORD_HASH=.*|DASHBOARD_PASSWORD_HASH=$HASH|" .env
+          sed -i "s|^SESSION_SECRET=.*|SESSION_SECRET=$(openssl rand -hex 32)|" .env
+          sed -i "s|^BMI_DB_PASSWORD=.*|BMI_DB_PASSWORD=$(openssl rand -hex 16)|" .env
 
-      - name: Build images and start the full stack
-        run: docker compose up -d --build
+      - name: Build images, provision the BMI database role, start the full stack
+        run: |
+          docker compose up -d --build postgres redis
+          docker compose --profile tools run --rm bmi-provision
+          docker compose up -d --build
 
       - name: Wait for the stack to become healthy
         run: |
@@ -90,6 +122,20 @@ jobs:
           curl -sf http://localhost/api/items/$ID
           STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE http://localhost/api/items/$ID)
           [ "$STATUS" = 204 ] || { echo "Expected 204 on delete, got $STATUS"; exit 1; }
+
+      - name: Dashboard end-to-end flow (login, profile, metrics, history, goal)
+        run: ./scripts/smoke_dashboard.sh http://localhost "$CI_DASHBOARD_PASSWORD"
+
+      - name: Least-privilege check (the BMI role cannot read the app's other tables)
+        run: |
+          set -eo pipefail
+          BMI_PW="$(grep '^BMI_DB_PASSWORD=' .env | cut -d= -f2)"
+          run_sql() { docker compose exec -T -e PGPASSWORD="$BMI_PW" postgres psql -U bmi_app -d appdb -v ON_ERROR_STOP=1 -tAc "$1"; }
+          run_sql "select count(*) from bmi.profiles" >/dev/null
+          if run_sql "select 1 from public.items" 2>/tmp/denied.txt; then echo "bmi_app could read public.items"; exit 1; fi
+          grep -q "permission denied" /tmp/denied.txt
+          if run_sql "create table public.sneaky(id int)" 2>/dev/null; then echo "bmi_app could create in public"; exit 1; fi
+          echo "bmi_app is confined to schema bmi"
 
       - name: Show logs on failure
         if: failure()

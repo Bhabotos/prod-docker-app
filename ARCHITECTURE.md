@@ -44,6 +44,29 @@ Upstreams are resolved by Docker DNS **per request** (`resolver 127.0.0.11` +
 variable `proxy_pass`, see `nginx/snippets/app_locations.conf`). Recreating
 `fastapi` during a deploy therefore never leaves nginx pointing at a dead IP.
 
+## BMI & Health Dashboard
+
+```
+Browser (index.html + js/ modules, SVG charts)          items.html (original demo, unchanged)
+   |  same-origin fetch, HttpOnly session cookie (Path=/api)
+   v
+nginx  /api/*  ->  FastAPI
+                     app/main.py  includes  bmi_dashboard.api.router
+                       every route: 503 if unconfigured, no-store headers
+                       protected routes: signed-cookie auth + Origin check
+                     routers -> health_service -> calculations / progress (pure functions)
+                                             \-> repository -> SQLAlchemy
+                                                        |  BMI_DB_USER (least privilege)
+                                                        v
+                                     PostgreSQL  schema bmi:  profiles, weight_entries, goals
+                                     (public.items and the n8n tables are never touched)
+```
+
+- **Auth:** one password (scrypt hash in `.env`), rate-limited login, stateless signed session cookie. `subject` columns keep the schema ready for real users later.
+- **Data model:** BMI/BMR/calories are computed on read, never stored, so they cannot go stale. Each weight entry snapshots the height at the time so old BMI points don't move when the profile height is edited. One entry per day.
+- **Isolation:** own SQLAlchemy `Base`/`MetaData(schema="bmi")`, own engine and DB role, own Alembic version table (`bmi.alembic_version`).
+- **No business logic in the browser:** JS formats, lays out and draws; thresholds (BMI bands), ranges and formulas come from the API (`/health/limits`, `/health/history`).
+
 ## CI/CD flow
 
 ```
