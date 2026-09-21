@@ -55,7 +55,8 @@ GitHub ---- Actions (ubuntu-latest) --------------------------------------------
    |   3 publish         push  ghcr.io/<owner>/prod-docker-app-{fastapi,frontend}:sha-<7>
    |
    +--- 4 deploy  runs-on: [self-hosted, linux, x64, hetzner] ----------------------
-             |   (main only; queued to the runner that long-polls GitHub)
+             |   (main only; waits for approval on the `production` environment,
+             |    then goes to the runner that long-polls GitHub)
              v
    Hetzner VPS: runner service, user "deploy"
              |   docker login (job token) -> ./scripts/deploy.sh

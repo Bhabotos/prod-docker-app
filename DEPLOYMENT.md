@@ -34,6 +34,10 @@ A runner executes whatever the workflow says, **as the runner's user, on your
 production box** (which is in the `docker` group = effectively root).
 - **Public repo + PRs from forks** is the classic attack: a malicious PR edits the workflow to `runs-on: self-hosted` and runs code on your server. Mitigations in this repo: the deploy job only runs on `push`/`workflow_dispatch` to `main`; **also** set *Settings -> Actions -> General -> Fork pull request workflows -> "Require approval for all outside collaborators"*, and keep branch protection on `main`.
 - The runner runs as `deploy`, **never root**.
+- **Repository protections (configured on GitHub, not in this repo):**
+  - Fork PR workflows need approval for **all** outside collaborators (Settings -> Actions -> General).
+  - Ruleset `protect-main`: changes to `main` must come through a pull request, the `test` and `docker-validate` checks must pass, and force-push / deletion are blocked. No approvals are required and there is no bypass, so a one-person repo can still merge its own PRs; if CI itself breaks, fix the check or edit the ruleset as admin.
+  - Environment `production`: every deploy job waits for a required reviewer (the repo owner, self-review allowed) and may only run from `main`. Approve or reject under the run's **Review deployments** button.
 - Secrets are never written to disk: the GHCR login uses the job's short-lived `GITHUB_TOKEN` and `docker logout` runs afterwards.
 - Anyone who can push to `main` can run code on the VPS - treat write access accordingly.
 - Keep the runner updated (it self-updates) and remove it (`./config.sh remove`) if decommissioning.
@@ -68,10 +72,10 @@ or has a stated impact.
 | 1 | `cd /opt/prod-docker-app && ./scripts/backup.sh` (as `deploy`) | writes `backups/*.sql.gz`; read-only on the DB |
 | 2 | `chmod 600 .env` | none (fixes world-readable secrets) |
 | 3 | Add to `.env`: `API_DOMAIN=api.bhabotos.com`, `LETSENCRYPT_EMAIL=<you>` | none |
-| 4 | Merge the PR to `main`. CI runs and `publish` pushes the images. The `deploy` job **queues** (no runner yet): **cancel that run** in the Actions tab (step 7 does the deploy) | none on server |
+| 4 | Merge the PR to `main`. CI runs and `publish` pushes the images. The `deploy` job stops at **Waiting for review** (protected environment `production`): open the run, click **Review deployments**, tick `production` and choose **Reject** (step 7 does the deploy). The run is then marked failed, which is expected | none on server |
 | 5 | Install the runner **without touching the working tree**: `cd /opt/prod-docker-app && git fetch origin && git show origin/main:scripts/setup_runner.sh > ~/setup_runner.sh && chmod +x ~/setup_runner.sh && RUNNER_TOKEN=<token> ~/setup_runner.sh` | adds a systemd service (needs sudo); token from repo Settings -> Actions -> Runners -> New runner |
 | 6 | `git checkout -- docker-compose.prod.yml && git merge --ff-only origin/main` | drops the local mount edit, which the repo now contains; **do 6 immediately before 7** |
-| 7 | Actions -> CI/CD -> **Run workflow** on `main`, tick **converge_all** | recreates nginx (~1-3 s blip on **all three sites**), plus redis and pgadmin (log-rotation change; cache/admin only). **PostgreSQL is not touched**: `deploy.sh` compares its compose config hash with the running container and aborts if it would be recreated (override: `ALLOW_DB_RECREATE=1`) |
+| 7 | Actions -> CI/CD -> **Run workflow** on `main`, tick **converge_all**, then **Review deployments -> Approve** the `production` deployment | recreates nginx (~1-3 s blip on **all three sites**), plus redis and pgadmin (log-rotation change; cache/admin only). **PostgreSQL is not touched**: `deploy.sh` compares its compose config hash with the running container and aborts if it would be recreated (override: `ALLOW_DB_RECREATE=1`) |
 | 8 | `./scripts/init_ssl.sh api.bhabotos.com you@example.com` | new cert; adds `nginx/conf.d/api.bhabotos.com.generated.conf`; reloads nginx |
 | 9 | `./scripts/renew_ssl.sh --dry-run`, then `./scripts/install_cron.sh` | schedules backup (02:00), cert renewal (03:17), status (every 15 min) |
 | 10 | `./scripts/status.sh` | everything should print `[OK]` |
@@ -153,7 +157,8 @@ same disk as the database; copy `backups/` off the server for real disaster reco
 |---|---|
 | `deploy.sh`: ".env is mode 664" | `chmod 600 .env` |
 | `deploy.sh`: "tracked files have local changes" | `git status`; commit or `git checkout -- <file>`; never edit tracked files on the server |
-| `deploy` job stays queued | runner offline: `sudo systemctl status 'actions.runner.*'`; labels must include `hetzner` |
+| `deploy` job shows **Waiting for review** | expected: the `production` environment needs an approval. Run page -> **Review deployments** -> Approve (deploy) or Reject (skip) |
+| `deploy` job stays queued after approval | runner offline: `sudo systemctl status 'actions.runner.*'`; labels must include `hetzner` |
 | Deploy rolled back | read the printed `fastapi`/`frontend` logs; `cat .deploy/history.log` |
 | `pull access denied` for ghcr.io | the job's `docker login` failed, or the package is not linked to the repo (GitHub -> Packages -> Package settings -> connect repository) |
 | nginx container `unhealthy` | it probes `http://127.0.0.1/nginx-health` (from `00-default.conf`); `docker exec prod-docker-app-nginx nginx -t` |
