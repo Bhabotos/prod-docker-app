@@ -71,7 +71,7 @@ or has a stated impact.
 | 4 | Merge the PR to `main`. CI runs and `publish` pushes the images. The `deploy` job **queues** (no runner yet): **cancel that run** in the Actions tab (step 7 does the deploy) | none on server |
 | 5 | Install the runner **without touching the working tree**: `cd /opt/prod-docker-app && git fetch origin && git show origin/main:scripts/setup_runner.sh > ~/setup_runner.sh && chmod +x ~/setup_runner.sh && RUNNER_TOKEN=<token> ~/setup_runner.sh` | adds a systemd service (needs sudo); token from repo Settings -> Actions -> Runners -> New runner |
 | 6 | `git checkout -- docker-compose.prod.yml && git merge --ff-only origin/main` | drops the local mount edit, which the repo now contains; **do 6 immediately before 7** |
-| 7 | Actions -> CI/CD -> **Run workflow** on `main`, tick **converge_all** | recreates nginx (~1-3 s blip on **all three sites**), postgres/redis/pgadmin (DB restart of a few seconds; data is on the `pgdata` volume) - because their log-rotation config changed |
+| 7 | Actions -> CI/CD -> **Run workflow** on `main`, tick **converge_all** | recreates nginx (~1-3 s blip on **all three sites**), plus redis and pgadmin (log-rotation change; cache/admin only). **PostgreSQL is not touched**: `deploy.sh` compares its compose config hash with the running container and aborts if it would be recreated (override: `ALLOW_DB_RECREATE=1`) |
 | 8 | `./scripts/init_ssl.sh api.bhabotos.com you@example.com` | new cert; adds `nginx/conf.d/api.bhabotos.com.generated.conf`; reloads nginx |
 | 9 | `./scripts/renew_ssl.sh --dry-run`, then `./scripts/install_cron.sh` | schedules backup (02:00), cert renewal (03:17), status (every 15 min) |
 | 10 | `./scripts/status.sh` | everything should print `[OK]` |
@@ -167,5 +167,6 @@ same disk as the database; copy `backups/` off the server for real disaster reco
 
 - 29 pending package updates and a **reboot required** (kernel). Schedule a maintenance window; everything restarts (`restart: always`).
 - SSH allows **root login and passwords** with ~8,000 failed attempts logged (fail2ban is active). Recommended: key-only, `PermitRootLogin no`, after confirming `deploy` key login works, keeping a second session open. Left untouched by decision.
+- **PostgreSQL has no log rotation** (default json-file driver, unbounded). It is deliberately left unchanged because the database is shared with n8n and any change restarts it. Add `logging: *default-logging` to the `postgres` service in a maintenance window and deploy with `ALLOW_DB_RECREATE=1`.
 - No swap on a 3.7 GB box that runs n8n, chroma, postgres and the app. Consider a 2 GB swap file.
 - `n8n:latest` / `chroma:latest` are unpinned.

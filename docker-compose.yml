@@ -11,7 +11,10 @@ services:
     image: postgres:16-alpine
     container_name: prod-docker-app-postgres
     restart: unless-stopped
-    logging: *default-logging
+    # NOTE: deliberately NO `logging:` here. This database is shared with n8n
+    # workflows, and any change to this service's definition makes Compose
+    # recreate (restart) it. Docker's default json-file driver has no rotation;
+    # add `logging: *default-logging` in a planned maintenance window.
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

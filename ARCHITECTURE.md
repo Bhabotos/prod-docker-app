@@ -77,7 +77,7 @@ Nothing is built on the server: the exact image that passed CI is the one deploy
 | One generated file per new domain (`*.generated.conf`) | adding `api.bhabotos.com` never edits the live `bhabotos.com` / `n8n` server blocks |
 | Two-phase HTTPS bootstrap | nginx refuses to load a `ssl_certificate` that doesn't exist yet - and a failed nginx would take every site down |
 | Self-hosted runner instead of SSH deploy | no SSH private key or host stored in GitHub; the runner dials OUT to GitHub, no inbound port needed |
-| Log rotation (10 MB x 3) on every container | logs can't fill the 38 GB disk |
+| Log rotation (10 MB x 3) on every container **except postgres** | logs can't fill the 38 GB disk; postgres is excluded so its definition is unchanged and the shared DB is never restarted by a deploy (see DEPLOYMENT.md) |
 
 ## Known limitations
 

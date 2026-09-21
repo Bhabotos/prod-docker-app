@@ -11,6 +11,7 @@
 # normal deploy only interrupts the API for the few seconds a container swap takes.
 # --all  converges the WHOLE stack (use after changing compose/edge config;
 #        this recreates any service whose definition changed, incl. nginx).
+#        It REFUSES to recreate postgres unless ALLOW_DB_RECREATE=1.
 #
 # Safety net: if anything fails after containers are touched, the previous
 # images + git revision are restored automatically and logs are printed.
@@ -92,6 +93,20 @@ trap rollback ERR
 log "Updating code (fast-forward only)"
 git fetch --quiet origin main
 git merge --ff-only "${DEPLOY_SHA:-origin/main}"
+
+# The database is shared with other workloads (n8n) and holds the only copy of
+# the data, so a deploy must never restart it by accident. Compose recreates a
+# service when its config hash changes; refuse (=> automatic rollback of the git
+# checkout) if this deploy would do that, unless explicitly allowed.
+if [ "$MODE" = all ]; then
+  want_hash=$("${COMPOSE[@]}" config --hash postgres | awk '{print $2}')
+  have_hash=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' prod-docker-app-postgres 2>/dev/null || true)
+  if [ -n "$have_hash" ] && [ "$have_hash" != "$want_hash" ] && [ "${ALLOW_DB_RECREATE:-0}" != 1 ]; then
+    warn "this deploy would RECREATE the postgres container (its compose config changed)."
+    warn "Refusing. If that is intended (maintenance window), re-run with ALLOW_DB_RECREATE=1."
+    false
+  fi
+fi
 
 log "Pulling images (before touching anything running)"
 "${COMPOSE[@]}" pull fastapi frontend
