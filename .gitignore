@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.pytest_cache/
 
 # Environment secrets
 .env
@@ -22,9 +23,18 @@ venv/
 pgdata/
 pgadmin_data/
 
-# Generated at deploy time by scripts/init_ssl.sh — templates are committed,
-# the rendered file (with the real domain baked in) is not.
+# Generated on the server by scripts/init_ssl.sh: the per-domain nginx config
+# (domain baked in, cert paths). Templates are committed, the output is not.
+nginx/conf.d/*.generated.conf
+
+# Legacy hand-edited single-file nginx config and its manual backups (older
+# server layout). Superseded by nginx/conf.d/.
 nginx/nginx.prod.conf
+nginx/*.backup*
+nginx/*.before-*
+
+# Deploy state written by scripts/deploy.sh (previous images, logs, lock)
+.deploy/
 
 # Local Postgres backups (see scripts/backup.sh)
 backups/

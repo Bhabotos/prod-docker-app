@@ -1,5 +1,6 @@
 import json
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Response
 from sqlalchemy.orm import Session
@@ -16,15 +17,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(settings.app_name)
 
-app = FastAPI(title=settings.app_name)
-
 ITEM_CACHE_TTL_SECONDS = 30
 
 
-@app.on_event("startup")
-async def on_startup() -> None:
+@asynccontextmanager
+async def lifespan(_: FastAPI):
     logger.info("Starting %s in %s mode", settings.app_name, settings.app_env)
     Base.metadata.create_all(bind=engine)
+    yield
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 
 @app.get("/")

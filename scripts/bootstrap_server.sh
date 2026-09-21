@@ -1,5 +1,7 @@
 #!/bin/bash
-# One-time setup for a FRESH Ubuntu VPS (22.04/24.04). Run as a sudo-capable
+# One-time setup for a FRESH Ubuntu VPS (22.04/24.04) ONLY. Do NOT run this on a
+# server that already hosts other services: it force-enables ufw with a fixed
+# rule set and clones into /opt/prod-docker-app. Run as a sudo-capable
 # user over SSH:
 #   scp scripts/bootstrap_server.sh youruser@your-server-ip:~
 #   ssh youruser@your-server-ip

@@ -1,0 +1,11 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; display: grid; place-items: start center; padding: 2rem 1rem; }
+main { width: min(40rem, 100%); }
+.muted { color: GrayText; font-size: .9rem; }
+form { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1rem 0; }
+input { flex: 1 1 10rem; padding: .5rem; }
+button { padding: .5rem 1rem; cursor: pointer; }
+ul { list-style: none; padding: 0; }
+li { display: flex; justify-content: space-between; gap: 1rem; padding: .6rem 0; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
+li small { display: block; color: GrayText; }
+#error { color: crimson; }

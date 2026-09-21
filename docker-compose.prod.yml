@@ -2,11 +2,15 @@
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
 # Differences from the base (dev) file:
-#   - fastapi runs from a pre-built registry image (no local build on the server)
+#   - fastapi + frontend run from pre-built registry images (no build on the server)
 #   - all services restart:always (dev uses unless-stopped)
-#   - nginx publishes 80 + 443 and gets the SSL-capable config + certbot volumes
-#   - pgadmin is bound to 127.0.0.1 only (see DEPLOYMENT.md for why)
-#   - certbot service added for Let's Encrypt certificate issuance/renewal
+#   - nginx publishes 80 + 443, mounts the whole nginx/conf.d/ directory (one
+#     file per site) plus the certbot volumes and the bhabotos.com static site
+#   - pgadmin stays bound to 127.0.0.1 only (see DEPLOYMENT.md)
+#   - certbot service added for Let's Encrypt issuance/renewal
+#
+# `!override` REPLACES the base list instead of merging with it (Compose merges
+# `ports`/`volumes` by appending, which would keep the dev config mounted too).
 
 services:
   postgres:
@@ -19,26 +23,46 @@ services:
     image: ${FASTAPI_IMAGE}
     restart: always
 
+  frontend:
+    image: ${FRONTEND_IMAGE}
+    restart: always
+
   nginx:
     restart: always
-    ports:
+    ports: !override
       - "80:80"
       - "443:443"
-    volumes:
-      - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+    volumes: !override
+      # A DIRECTORY mount, not a single file: git replaces files on pull (new
+      # inode), and a single-file bind mount would keep serving the old one.
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
       - certbot_webroot:/var/www/certbot:ro
       - certbot_certs:/etc/letsencrypt:ro
+      - /opt/bhabotos-site/current:/var/www/bhabotos:ro
+    # The dev probe hits /health, which in prod is a 301 to HTTPS and fails cert
+    # verification (nginx was permanently "unhealthy"). This one is answered by
+    # the default server in conf.d/00-default.conf.
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/nginx-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   pgadmin:
     restart: always
-    # Port binding is already loopback-only in the base file — nothing to
-    # override here. (Compose *appends* ports lists across files rather
-    # than replacing them, so redeclaring it here would add a second,
-    # duplicate binding instead of overriding the first.)
+    # Port binding is already loopback-only in the base file - nothing to
+    # override here.
 
   certbot:
     image: certbot/certbot:latest
     container_name: prod-docker-app-certbot
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - certbot_webroot:/var/www/certbot
       - certbot_certs:/etc/letsencrypt

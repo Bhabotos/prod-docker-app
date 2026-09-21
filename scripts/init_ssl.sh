@@ -1,42 +1,52 @@
-#!/bin/bash
-# ONE-TIME SSL bootstrap. Run this after DNS for <domain> points at this
-# server's IP, and after `docker compose ... up -d` has run at least once
-# (so the postgres/redis/fastapi/pgadmin containers already exist).
+#!/usr/bin/env bash
+# ONE-TIME HTTPS bootstrap for a NEW domain (e.g. api.bhabotos.com). Safe to
+# run on a server whose nginx already serves other sites: it only adds
+# nginx/conf.d/<domain>.generated.conf and never edits the other site files.
 #
-# Two-phase bootstrap, because nginx can't start with SSL config pointing
-# at certificate files that don't exist yet:
-#   Phase 1: start nginx in HTTP-only mode (serves the ACME challenge)
-#   Phase 2: request the cert, then switch nginx to full HTTPS config
+#   ./scripts/init_ssl.sh api.bhabotos.com you@example.com
 #
-# Usage: ./scripts/init_ssl.sh yourdomain.com you@example.com
-set -euo pipefail
+# Two phases (nginx can't load a server block whose cert files don't exist yet):
+#   1. HTTP-only config that serves the ACME challenge
+#   2. request the cert, then swap in the HTTPS config
+# If the HTTPS config fails nginx -t, the HTTP-only config is restored.
+set -Eeuo pipefail
+# shellcheck source=scripts/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+cd "$PROJECT_DIR"
 
 DOMAIN="${1:?Usage: init_ssl.sh <domain> <email>}"
 EMAIL="${2:?Usage: init_ssl.sh <domain> <email>}"
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+[[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || die "invalid domain: $DOMAIN"
+CONF="nginx/conf.d/${DOMAIN}.generated.conf"
 
-echo "==> Phase 1: rendering HTTP-only nginx config for $DOMAIN"
-sed "s/__DOMAIN_NAME__/$DOMAIN/g" nginx/http_only.conf.template > nginx/nginx.prod.conf
+log "Checking DNS for $DOMAIN"
+resolved=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}') || true
+public_ip=$(curl -4 -fsS --max-time 5 https://ifconfig.me || true)
+[ -n "$resolved" ] || die "$DOMAIN does not resolve yet - add the DNS A record first"
+[ -z "$public_ip" ] || [ "$resolved" = "$public_ip" ] \
+  || die "$DOMAIN resolves to $resolved but this server is $public_ip"
 
-echo "==> Starting nginx (HTTP-only, to serve the ACME challenge)"
-$COMPOSE up -d nginx
+sed "s/__DOMAIN_NAME__/$DOMAIN/g" nginx/http_only.conf.template > "$CONF"
+log "Phase 1: HTTP-only config written to $CONF"
+nginx_reload
 
-echo "==> Requesting certificate from Let's Encrypt"
-$COMPOSE run --rm certbot certonly \
+log "Requesting certificate from Let's Encrypt"
+# --entrypoint is required: the certbot service in docker-compose.prod.yml has
+# `entrypoint: "true"` so it never runs on `up`.
+"${COMPOSE[@]}" run --rm --entrypoint certbot certbot certonly \
   --webroot --webroot-path=/var/www/certbot \
-  -d "$DOMAIN" \
-  --email "$EMAIL" \
-  --agree-tos \
-  --no-eff-email
+  -d "$DOMAIN" --email "$EMAIL" --agree-tos --no-eff-email --keep-until-expiring
 
-echo "==> Phase 2: rendering full HTTPS nginx config for $DOMAIN"
-sed "s/__DOMAIN_NAME__/$DOMAIN/g" nginx/https.conf.template > nginx/nginx.prod.conf
+log "Phase 2: switching to HTTPS config"
+cp "$CONF" "$CONF.http-only"
+sed "s/__DOMAIN_NAME__/$DOMAIN/g" nginx/https.conf.template > "$CONF"
+if ! nginx_reload; then
+  warn "HTTPS config rejected - restoring HTTP-only config"
+  mv "$CONF.http-only" "$CONF"
+  nginx_reload
+  exit 1
+fi
+rm -f "$CONF.http-only"
 
-echo "==> Reloading nginx with HTTPS enabled"
-$COMPOSE up -d nginx
-$COMPOSE exec nginx nginx -s reload
-
-echo
-echo "Done. https://$DOMAIN should now be serving over TLS."
-echo "Set up automatic renewal: crontab -e, add:"
-echo "  0 3 * * * cd $(pwd) && ./scripts/renew_ssl.sh >> /var/log/ssl_renew.log 2>&1"
+log "Done: https://$DOMAIN"
+echo "Make sure API_DOMAIN=$DOMAIN is set in .env, and that renewal is scheduled (scripts/install_cron.sh)."
