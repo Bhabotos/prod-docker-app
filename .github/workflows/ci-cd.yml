@@ -1,0 +1,185 @@
+name: CI/CD
+
+# Pull requests: test + validate only (never touches production).
+# Push to main:  test -> validate -> publish images -> deploy on the VPS runner.
+# Manual run on main (workflow_dispatch) does the same; tick converge_all for a full-stack deploy.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      converge_all:
+        description: "Recreate the WHOLE stack (deploy.sh --all) - only after changing compose/nginx config"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ------------------------------------------------------------------ 1. test
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r app/requirements-dev.txt
+
+      - name: Unit tests
+        working-directory: app
+        run: pytest -q
+
+      - name: Lint shell scripts
+        run: shellcheck -x -S warning scripts/*.sh
+
+      - name: Validate compose files
+        run: |
+          cp .env.example .env
+          docker compose config -q
+          FASTAPI_IMAGE=x:1 FRONTEND_IMAGE=y:1 \
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q
+
+  # ------------------------------------------- 2. docker build + smoke test
+  docker-validate:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env for CI
+        run: cp .env.example .env
+
+      - name: Build images and start the full stack
+        run: docker compose up -d --build
+
+      - name: Wait for the stack to become healthy
+        run: |
+          for i in $(seq 1 30); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' prod-docker-app-nginx 2>/dev/null || echo starting)
+            [ "$status" = healthy ] && { echo "Stack is healthy"; exit 0; }
+            echo "Waiting ($i/30) status=$status"; sleep 5
+          done
+          docker compose logs
+          exit 1
+
+      - name: Smoke test (through nginx, frontend and /api)
+        run: |
+          set -eo pipefail
+          curl -sf http://localhost/ | grep -q "<title>"
+          curl -sf http://localhost/api/health
+
+          RESP=$(curl -sf -X POST http://localhost/api/items \
+            -H "Content-Type: application/json" \
+            -d '{"name":"CI Test","description":"created by GitHub Actions"}')
+          echo "$RESP"
+          ID=$(echo "$RESP" | grep -o '"id":[0-9]*' | grep -o '[0-9]*')
+
+          curl -sf http://localhost/api/items/$ID
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE http://localhost/api/items/$ID)
+          [ "$STATUS" = 204 ] || { echo "Expected 204 on delete, got $STATUS"; exit 1; }
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  # -------------------------------------------------- 3. publish (main only)
+  publish:
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    needs: docker-validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      fastapi_image: ${{ steps.meta.outputs.fastapi }}
+      frontend_image: ${{ steps.meta.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image names (GHCR requires lowercase)
+        id: meta
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          tag="sha-${GITHUB_SHA::7}"
+          echo "fastapi=ghcr.io/${owner}/prod-docker-app-fastapi:${tag}" >> "$GITHUB_OUTPUT"
+          echo "frontend=ghcr.io/${owner}/prod-docker-app-frontend:${tag}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push fastapi
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          push: true
+          tags: ${{ steps.meta.outputs.fastapi }}
+          cache-from: type=gha,scope=fastapi
+          cache-to: type=gha,scope=fastapi,mode=max
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ steps.meta.outputs.frontend }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+
+  # ------------------------- 4. deploy on the Hetzner self-hosted runner
+  deploy:
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    needs: publish
+    # Label match: the runner must carry ALL of these labels.
+    runs-on: [self-hosted, linux, x64, hetzner]
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    steps:
+      # No checkout: the runner deploys from the persistent clone in
+      # /opt/prod-docker-app (deploy.sh fast-forwards it to this commit).
+      - name: Log in to GHCR (short-lived token, removed at the end)
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Deploy
+        working-directory: /opt/prod-docker-app
+        env:
+          FASTAPI_IMAGE: ${{ needs.publish.outputs.fastapi_image }}
+          FRONTEND_IMAGE: ${{ needs.publish.outputs.frontend_image }}
+          DEPLOY_SHA: ${{ github.sha }}
+          CONVERGE: ${{ inputs.converge_all && '--all' || '' }}
+        # CONVERGE is intentionally unquoted: empty => no argument.
+        run: ./scripts/deploy.sh $CONVERGE
+
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io

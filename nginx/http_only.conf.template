@@ -1,8 +1,6 @@
-# Phase 1 of SSL bootstrap (see scripts/init_ssl.sh).
-# Used BEFORE a certificate exists: serves the Let's Encrypt ACME challenge
-# and proxies everything else over plain HTTP so the app stays reachable
-# during the brief bootstrap window. __DOMAIN_NAME__ is replaced by sed.
-
+# Phase 1 of scripts/init_ssl.sh: used BEFORE a certificate exists.
+# Serves the Let's Encrypt HTTP-01 challenge and the app over plain HTTP.
+# __DOMAIN_NAME__ is substituted by sed.
 server {
     listen 80;
     server_name __DOMAIN_NAME__;
@@ -11,11 +9,5 @@ server {
         root /var/www/certbot;
     }
 
-    location / {
-        proxy_pass http://fastapi:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
+    include /etc/nginx/snippets/app_locations.conf;
 }
