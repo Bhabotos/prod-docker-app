@@ -6,3 +6,8 @@ venv/
 .git
 Dockerfile
 .dockerignore
+# test / dev only: keep them out of the runtime image
+tests/
+pytest.ini
+requirements-dev.txt
+.pytest_cache/

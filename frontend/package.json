@@ -1,0 +1,10 @@
+{
+  "name": "prod-docker-app-frontend",
+  "private": true,
+  "type": "module",
+  "description": "Static dashboard; no runtime or build dependencies. Tests use Node's built-in runner.",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\"",
+    "check": "node --check js/*.js js/components/*.js js/charts/*.js"
+  }
+}

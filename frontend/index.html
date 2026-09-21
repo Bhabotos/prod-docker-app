@@ -3,24 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>prod-docker-app · items</title>
-  <link rel="stylesheet" href="style.css">
+  <meta name="color-scheme" content="light dark">
+  <title>BMI &amp; Health Dashboard</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="dashboard.css">
 </head>
 <body>
-  <main>
-    <h1>Items</h1>
-    <p class="muted">Frontend tier &rarr; <code>/api</code> (FastAPI) &rarr; PostgreSQL + Redis.
-      API status: <span id="status">checking…</span></p>
+  <a class="skip-link" href="#app">Skip to content</a>
+  <header class="site-header">
+    <h1>BMI &amp; Health Dashboard</h1>
+    <nav>
+      <a href="/items.html">Items demo</a>
+      <button id="logout" type="button" class="btn btn--ghost" hidden>Log out</button>
+    </nav>
+  </header>
 
-    <form id="add-form">
-      <input id="name" placeholder="Name" required maxlength="255">
-      <input id="description" placeholder="Description (optional)" maxlength="1000">
-      <button type="submit">Add</button>
-    </form>
+  <main id="app" tabindex="-1"><p class="muted">Loading…</p></main>
+  <p id="status" class="sr-only" role="status" aria-live="polite"></p>
 
-    <p id="error" role="alert" hidden></p>
-    <ul id="items"></ul>
-  </main>
-  <script src="app.js"></script>
+  <footer class="site-footer">
+    <p id="disclaimer">General wellness and educational information only. BMI, BMR and calorie figures are
+      estimates from standard formulas, not a medical diagnosis or medical advice. Talk to a qualified
+      healthcare professional before changing your diet or exercise.</p>
+  </footer>
+
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>

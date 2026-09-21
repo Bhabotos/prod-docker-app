@@ -2,7 +2,9 @@
 FROM nginxinc/nginx-unprivileged:1.27-alpine
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY index.html style.css app.js /usr/share/nginx/html/
+# Dashboard (index.html + js/ + dashboard.css) and the original items demo (items.html + app.js + style.css).
+COPY index.html items.html style.css dashboard.css app.js /usr/share/nginx/html/
+COPY js/ /usr/share/nginx/html/js/
 
 EXPOSE 8080
 

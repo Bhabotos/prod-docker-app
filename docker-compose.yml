@@ -55,6 +55,15 @@ services:
       LOG_LEVEL: ${LOG_LEVEL}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
       REDIS_URL: redis://redis:${REDIS_PORT}/0
+      # BMI & Health Dashboard. Any empty value keeps the feature disabled (routes answer 503).
+      BMI_DB_USER: ${BMI_DB_USER:-}
+      BMI_DB_PASSWORD: ${BMI_DB_PASSWORD:-}
+      BMI_DB_HOST: postgres
+      BMI_DB_PORT: ${POSTGRES_PORT}
+      BMI_DB_NAME: ${POSTGRES_DB}
+      DASHBOARD_PASSWORD_HASH: ${DASHBOARD_PASSWORD_HASH:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,6 +127,30 @@ services:
       # is bound to 127.0.0.1 rather than all interfaces. Reach it remotely
       # via an SSH tunnel (see DEPLOYMENT.md).
       - "127.0.0.1:${PGADMIN_PORT}:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # One-shot helper, only for dev/CI:  docker compose --profile tools run --rm bmi-provision
+  # Creates the least-privilege role + `bmi` schema (same SQL production uses via
+  # scripts/provision_bmi_db.sh). It is a separate service, so the postgres
+  # service definition - and therefore the running container - stays unchanged.
+  bmi-provision:
+    image: postgres:16-alpine
+    profiles: ["tools"]
+    restart: "no"
+    entrypoint: ["psql", "-v", "ON_ERROR_STOP=1", "-q", "-f", "/sql/bmi_provision.sql"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      BMI_DB_USER: ${BMI_DB_USER:-bmi_app}
+      BMI_DB_PASSWORD: ${BMI_DB_PASSWORD:-}
+    volumes:
+      - ./scripts/sql:/sql:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -168,6 +168,33 @@ same disk as the database; copy `backups/` off the server for real disaster reco
 | `/api/docs` shows no schema | the API must run with `--root-path /api` (set in `app/Dockerfile`) |
 | Docker ports bypass ufw | published ports are opened by Docker directly; only nginx publishes 80/443 and pgAdmin is `127.0.0.1` only |
 
+## BMI & Health Dashboard rollout
+
+The feature is **off until configured**: without the variables below the API boots as before and the BMI
+routes answer 503, so deploying the code first is safe. Every step that changes the server needs your approval.
+
+| # | Step | Impact |
+|---|---|---|
+| 1 | `./scripts/backup.sh` | fresh dump |
+| 2 | Generate secrets on the server: `openssl rand -hex 24` (for `BMI_DB_PASSWORD`) and, using the **new** API image, `docker run --rm -it ghcr.io/<owner>/prod-docker-app-fastapi:<sha-tag> python -m bmi_dashboard.cli hash-password` (prompts for your dashboard password; prints `DASHBOARD_PASSWORD_HASH` and a `SESSION_SECRET`) | none; the password is never a command-line argument |
+| 3 | Add to `.env` (mode 600): `BMI_DB_USER=bmi_app`, `BMI_DB_PASSWORD`, `DASHBOARD_PASSWORD_HASH`, `SESSION_SECRET`, `COOKIE_SECURE=true` | none until the API restarts |
+| 4 | `./scripts/provision_bmi_db.sh` (dry run: prints state and SQL), then `--apply` | creates role `bmi_app` + empty schema `bmi` **inside the running postgres container**; the container is not restarted; nothing in `public` is read or changed; prints a least-privilege verification |
+| 5 | Merge + deploy through the pipeline (approve the `production` environment) | only `fastapi` + `frontend` are swapped; on start the API applies migration `0001` as `bmi_app` (creates 3 tables in `bmi`). If the migration fails the container never turns healthy and `deploy.sh` rolls back |
+| 6 | Verify by hand at `https://api.bhabotos.com/`: log in, create the profile, record a weight | first real data. **Do not run `scripts/smoke_dashboard.sh` in production: it writes test data** |
+
+**Rollback:** redeploying the previous image is safe; the new tables are additive and unused by old code. To remove the feature
+entirely (destructive to BMI data only): `DROP SCHEMA bmi CASCADE; DROP ROLE bmi_app;`. To switch it off without touching data,
+empty `SESSION_SECRET` and redeploy.
+
+**Guarantees, and how they are tested** (`app/tests/integration/`): migrations only touch schema `bmi`; the existing tables are
+byte-for-byte unchanged (row hashes compared before/after); `bmi_app` is denied SELECT/INSERT/UPDATE/DELETE/TRUNCATE/DROP/ALTER/CREATE
+on `public`; models and migration have no drift; downgrade removes only BMI objects.
+
+**Security notes:** login is rate-limited (5 failures / 15 min per IP, in Redis); the session is an HMAC-signed `HttpOnly`,
+`Secure`, `SameSite=Strict` cookie scoped to `/api`; state-changing requests also get an Origin check; all BMI responses are
+`Cache-Control: no-store`. Health data is stored unencrypted in PostgreSQL and will appear in `backups/` (mode 600).
+`/api/docs` (Swagger) is still public and lists these endpoints (schema only, no data); protect or disable it for hardening.
+
 ## 9. Server hygiene items found in the audit (not done by this repo)
 
 - 29 pending package updates and a **reboot required** (kernel). Schedule a maintenance window; everything restarts (`restart: always`).
